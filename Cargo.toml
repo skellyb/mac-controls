@@ -1,0 +1,9 @@
+[package]
+name = "mac-controls"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+core-foundation = "0.9.2"
+core-graphics = "0.22.3"
+termion = "1.5.6"
