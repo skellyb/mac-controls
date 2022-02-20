@@ -1,15 +1,18 @@
-//! This repo helped me sort out how to interact with CoreAudio
+//! This repo helped me sort out how to work with CoreAudio
 //! https://github.com/ewrobinson/ERVolumeAdjust
 
 use core_foundation::{
     base::FromVoid,
     string::{CFString, CFStringRef},
 };
-use std::borrow::BorrowMut;
 use std::collections::HashSet;
 use std::os::raw::c_void;
+use std::{borrow::BorrowMut, cell::RefCell};
 
 use crate::coreaudio::*;
+
+const ZERO: f32 = 0.0;
+const FULL: f32 = 1.0;
 
 #[derive(Debug)]
 pub struct AudioState {
@@ -24,24 +27,26 @@ pub struct Device {
     pub id: AudioDeviceID,
     pub uid: String,
     pub name: String,
-    pub input: Option<Volume>,
-    pub output: Option<Volume>,
+    pub input: RefCell<Volume>,
+    pub output: RefCell<Volume>,
 }
 
 #[derive(Debug)]
 pub struct Volume {
+    pub enabled: bool,
     pub level: f32,
     pub cache: f32,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     Input,
     Output,
 }
 
-/// Audio API
+/// AudioState API
 impl AudioState {
+    /// Init new AudioState and sync with OS.
     pub fn new() -> Self {
         let mut audio = AudioState {
             active_input: None,
@@ -49,49 +54,26 @@ impl AudioState {
             devices: Vec::new(),
             mutes: Vec::new(),
         };
-        audio.update(false);
+        audio.update();
         audio
     }
 
-    // Checks state against the OS, making updates where needed.
-    // Use keep_cache when changing mute to avoid overwriting it with zero
-    pub fn update(&mut self, keep_cache: bool) {
+    /// Checks state against the OS, making updates where needed.
+    pub fn update(&mut self) {
         let ids = device_ids();
         let all = HashSet::<_>::from_iter(ids.into_iter());
         let curr = HashSet::from_iter(self.devices.iter().map(|d| d.id));
 
-        // update
+        // update existing devices
         for id in all.intersection(&curr) {
+            let is_muted = self.mutes.contains(id);
             if let Some(device) = self.devices.iter_mut().find(|d| d.id == *id) {
-                let (vol_in, vol_out) = volume_level(&id);
-                if let Some(level) = vol_in {
-                    device.input.as_mut().map(|v| {
-                        v.level = level;
-                        // todo: can I manage this with the mutes state instead?
-                        if !keep_cache {
-                            v.cache = level;
-                        }
-                        v
-                    });
-                    if level > 0.0 {
-                        if let Some(i) = self.mutes.iter().position(|mid| mid == id) {
-                            self.mutes.remove(i);
-                        }
-                    }
+                let (sys_vol_in, sys_vol_out) = volume_level(&id);
+                if let Some(level) = sys_vol_in {
+                    update_channel(id, &device.input, &mut self.mutes, level, is_muted);
                 }
-                if let Some(level) = vol_out {
-                    device.output.as_mut().map(|v| {
-                        v.level = level;
-                        if !keep_cache {
-                            v.cache = level;
-                        }
-                        v
-                    });
-                    if level > 0.0 {
-                        if let Some(i) = self.mutes.iter().position(|mid| mid == id) {
-                            self.mutes.remove(i);
-                        }
-                    }
+                if let Some(level) = sys_vol_out {
+                    update_channel(id, &device.output, &mut self.mutes, level, is_muted);
                 }
                 self.mute_check(id);
             }
@@ -100,16 +82,26 @@ impl AudioState {
         // add/remove
         for id in all.symmetric_difference(&curr) {
             if all.contains(id) {
+                // add new device
                 let (vol_in, vol_out) = volume_level(&id);
                 self.devices.push(Device {
                     id: *id,
                     uid: device_uid(&id),
                     name: device_name(&id),
-                    input: vol_in.map(|v| Volume { level: v, cache: v }),
-                    output: vol_out.map(|v| Volume { level: v, cache: v }),
+                    input: RefCell::new(Volume {
+                        enabled: vol_in.is_some(),
+                        level: vol_in.unwrap_or(ZERO),
+                        cache: vol_in.unwrap_or(ZERO),
+                    }),
+                    output: RefCell::new(Volume {
+                        enabled: vol_out.is_some(),
+                        level: vol_out.unwrap_or(ZERO),
+                        cache: vol_out.unwrap_or(ZERO),
+                    }),
                 });
                 self.mute_check(id);
             } else {
+                // remove
                 if let Some(i) = self.devices.iter().position(|d| d.id == *id) {
                     self.devices.remove(i);
                 }
@@ -136,7 +128,7 @@ impl AudioState {
         }
     }
 
-    // Get a sorted list of audio devices (active_in, active_out, muted, device).
+    /// Get a sorted list of audio devices (active_in, active_out, muted, device).
     pub fn device_list(&self) -> Vec<(bool, bool, bool, &Device)> {
         let mut list: Vec<(bool, bool, bool, &Device)> = self
             .devices
@@ -156,25 +148,25 @@ impl AudioState {
     }
 
     /// Fetch a devices input state -> (volume, muted)
-    pub fn input(&self, id: &AudioDeviceID) -> Option<(&Volume, bool)> {
+    pub fn input(&self, id: &AudioDeviceID) -> Option<(f32, bool)> {
         if let Some(device) = self.devices.iter().find(|d| d.id == *id) {
-            if let Some(volume) = device.input.as_ref() {
-                Some((volume, self.mutes.contains(id)))
-            } else {
-                None
+            let vol = device.input.borrow();
+            match vol.enabled {
+                true => Some((vol.level, self.mutes.contains(id))),
+                false => None,
             }
         } else {
             None
         }
     }
 
-    /// Fetch a devices output state -> (volume, muted)
-    pub fn output(&self, id: &AudioDeviceID) -> Option<(&Volume, bool)> {
+    /// Fetch a devices output state -> (level, muted)
+    pub fn output(&self, id: &AudioDeviceID) -> Option<(f32, bool)> {
         if let Some(device) = self.devices.iter().find(|d| d.id == *id) {
-            if let Some(volume) = device.output.as_ref() {
-                Some((volume, self.mutes.contains(id)))
-            } else {
-                None
+            let vol = device.output.borrow();
+            match vol.enabled {
+                true => Some((vol.level, self.mutes.contains(id))),
+                false => None,
             }
         } else {
             None
@@ -183,49 +175,53 @@ impl AudioState {
 
     /// Adjust volume by variable amount (with max/min of 1.0/0.0)
     pub fn move_volume(&mut self, channel: Channel, amount: f32) {
-        let (id, vol_state) = match channel {
-            Channel::Input if self.active_input.is_some() => {
-                let device = &self.devices[self.active_input.unwrap()];
-                (device.id, self.input(&device.id))
+        {
+            let (id, mut vol_ref) = match channel {
+                Channel::Input if self.active_input.is_some() => {
+                    let device = &self.devices[self.active_input.unwrap()];
+                    (device.id, device.input.borrow_mut())
+                }
+                Channel::Output if self.active_output.is_some() => {
+                    let device = &self.devices[self.active_output.unwrap()];
+                    (device.id, device.output.borrow_mut())
+                }
+                _ => return,
+            };
+            if vol_ref.enabled {
+                let mut next_level = vol_ref.level + amount;
+                next_level = if next_level < ZERO { ZERO } else { next_level };
+                next_level = if next_level > FULL { FULL } else { next_level };
+                vol_ref.level = next_level;
+                vol_ref.cache = next_level;
+                set_volume(&id, channel, next_level);
             }
-            Channel::Output if self.active_output.is_some() => {
-                let device = &self.devices[self.active_output.unwrap()];
-                (device.id, self.output(&device.id))
-            }
-            _ => return,
-        };
-        if let Some((volume, _)) = vol_state {
-            let mut next_level = volume.level + amount;
-            next_level = if next_level < 0.0 { 0.0 } else { next_level };
-            next_level = if next_level > 1.0 { 1.0 } else { next_level };
-            set_volume(&id, channel, next_level);
         }
-        self.update(false);
+        self.update();
     }
 
     // Toggle workaround mute for input or output.
     pub fn toggle_mute(&mut self, channel: Channel) {
-        let (id, vol_state) = match channel {
-            Channel::Input if self.active_input.is_some() => {
-                let device = &self.devices[self.active_input.unwrap()];
-                (device.id, self.input(&device.id))
-            }
-            Channel::Output if self.active_output.is_some() => {
-                let device = &self.devices[self.active_output.unwrap()];
-                (device.id, self.output(&device.id))
-            }
-            _ => return,
-        };
-        dbg!(vol_state);
-        if let Some((volume, muted)) = vol_state {
-            if muted {
-                set_volume(&id, channel, volume.cache);
-                self.update(true);
-            } else {
-                set_volume(&id, channel, 0.0);
-                self.update(true);
+        {
+            let (id, vol_state) = match channel {
+                Channel::Input if self.active_input.is_some() => {
+                    let device = &self.devices[self.active_input.unwrap()];
+                    (device.id, device.input.borrow())
+                }
+                Channel::Output if self.active_output.is_some() => {
+                    let device = &self.devices[self.active_output.unwrap()];
+                    (device.id, device.output.borrow())
+                }
+                _ => return,
+            };
+            if vol_state.enabled {
+                if self.mutes.contains(&id) {
+                    set_volume(&id, channel, vol_state.cache);
+                } else {
+                    set_volume(&id, channel, ZERO);
+                }
             }
         }
+        self.update();
     }
 }
 
@@ -234,16 +230,16 @@ impl AudioState {
     /// and output of a bluetooth device, making it impossible to mute the mic
     /// without muting speakers.
     ///
-    /// Here we check if a new system mute is set, if so, takeover control. Save
-    /// the current volume level, set volume to 0 if muted, and unmute the
-    /// system. We use our cached volume level to unmute.
+    /// Here we check if a new system mute is set, if so, takeover control.
+    /// Save the current volume level, set volume to 0 if muted, and unmute
+    /// the system. We use our cached volume level to unmute.
     fn mute_check(&mut self, id: &AudioDeviceID) {
         let (mute_in, mute_out) = device_mutes(&id);
         let new_in = mute_in.is_some() && mute_in.unwrap();
         let new_out = mute_out.is_some() && mute_out.unwrap();
         if new_in || new_out {
             let chan: Channel;
-            let chan_state = if mute_in.is_some() {
+            let mut chan_state = if mute_in.is_some() {
                 chan = Channel::Input;
                 // TODO: ugly access
                 self.devices
@@ -265,13 +261,12 @@ impl AudioState {
                 return;
             };
             // set volume to 0 (sys and state)
-            set_volume(&id, chan, 0.0);
+            set_volume(&id, chan, ZERO);
             // cache current volume level
-            chan_state.as_mut().map(|mut v| {
-                v.cache = v.level;
-                v.level = 0.0;
-                v
-            });
+            let vol_ref = chan_state.borrow_mut();
+            vol_ref.cache = vol_ref.level;
+            vol_ref.level = ZERO;
+
             // unmute system
             set_mute(&id, chan, false);
             // add ID to mutes state
@@ -281,6 +276,28 @@ impl AudioState {
         }
     }
 }
+
+fn update_channel(
+    id: &u32,
+    vol_state: &RefCell<Volume>,
+    mutes: &mut Vec<u32>,
+    level: f32,
+    is_muted: bool,
+) {
+    let mut v_ref = vol_state.borrow_mut();
+    v_ref.enabled = true;
+    v_ref.level = level;
+    if level > ZERO && is_muted {
+        // volume raised, remove from mutes
+        if let Some(i) = mutes.iter().position(|mid| *mid == *id) {
+            mutes.remove(i);
+        }
+    } else if level == ZERO && !is_muted {
+        // volume dropped to zero, add to mutes
+        mutes.push(*id);
+    }
+}
+
 
 /// First get the size of the "devices" data. Divide that by the size of a u32
 /// to get the number of devices. Finally, fetch the data in a u32 vec.

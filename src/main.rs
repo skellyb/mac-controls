@@ -155,7 +155,7 @@ fn main() {
                 draw(&mut stdout, &state);
             }
             Action::Poll => {
-                state.audio.update(false);
+                state.audio.update();
                 draw(&mut stdout, &state);
             }
             Action::Exit => break,

@@ -21,7 +21,7 @@ pub fn draw(out: &mut RawTerminal<Stdout>, state: &AppState) {
         "{start}{clear_line}{title}\r
 -------------\r
 {list}\r-------------\r
-{clear_line}Keys: {mods:?}{keys:?}
+{clear_line}Keys: {mods:?}{keys:?}\r
 "
     )
     .unwrap();
@@ -77,13 +77,13 @@ fn draw_list(state: &AppState) -> String {
     list
 }
 
-fn draw_level(volume: Option<&Volume>, muted: bool) -> String {
+fn draw_level(volume: Option<f32>, muted: bool) -> String {
     match volume {
         Some(vol) => {
-            if vol.level == 0.0 || muted {
+            if vol == 0.0 || muted {
                 return "░".repeat(10);
             }
-            let steps = (vol.level * 10.0) as usize;
+            let steps = (vol * 10.0) as usize;
             let amount = "▓".repeat(steps);
             let fill = "▒".repeat(10 - steps);
             format!("{}{}", amount, fill)
