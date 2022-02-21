@@ -34,6 +34,7 @@ pub struct Device {
 #[derive(Debug)]
 pub struct Volume {
     pub enabled: bool,
+    pub selectable: bool,
     pub level: f32,
     pub cache: f32,
 }
@@ -90,11 +91,13 @@ impl AudioState {
                     name: device_name(&id),
                     input: RefCell::new(Volume {
                         enabled: vol_in.is_some(),
+                        selectable: can_be_default_device(Channel::Input, &id),
                         level: vol_in.unwrap_or(ZERO),
                         cache: vol_in.unwrap_or(ZERO),
                     }),
                     output: RefCell::new(Volume {
                         enabled: vol_out.is_some(),
+                        selectable: can_be_default_device(Channel::Output, &id),
                         level: vol_out.unwrap_or(ZERO),
                         cache: vol_out.unwrap_or(ZERO),
                     }),
@@ -223,6 +226,102 @@ impl AudioState {
         }
         self.update();
     }
+
+    /// Select next input.
+    pub fn next_input(&mut self) {
+        let in_ids: Vec<&u32> = self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                let in_ref = d.input.borrow();
+                if in_ref.enabled && in_ref.selectable {
+                    Some(&d.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if let Some(i) = self.active_input {
+            let active_device = &self.devices[i];
+            if let Some(pos) = in_ids.iter().position(|&id| *id == active_device.id) {
+                let next = if pos < in_ids.len() - 1 { pos + 1 } else { 0 };
+                set_default_device(Channel::Input, in_ids[next])
+            }
+        }
+        self.update();
+    }
+
+    /// Select previous input.
+    pub fn prev_input(&mut self) {
+        let in_ids: Vec<&u32> = self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                let in_ref = d.input.borrow();
+                if in_ref.enabled && in_ref.selectable {
+                    Some(&d.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if let Some(i) = self.active_input {
+            let active_device = &self.devices[i];
+            if let Some(pos) = in_ids.iter().position(|&id| *id == active_device.id) {
+                let next = if pos == 0 { in_ids.len() - 1 } else { pos - 1 };
+                set_default_device(Channel::Input, in_ids[next])
+            }
+        }
+        self.update();
+    }
+
+    /// Select next output.
+    pub fn next_output(&mut self) {
+        let out_ids: Vec<&u32> = self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                let out_ref = d.output.borrow();
+                if out_ref.enabled && out_ref.selectable {
+                    Some(&d.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if let Some(i) = self.active_output {
+            let active_device = &self.devices[i];
+            if let Some(pos) = out_ids.iter().position(|&id| *id == active_device.id) {
+                let next = if pos < out_ids.len() - 1 { pos + 1 } else { 0 };
+                set_default_device(Channel::Output, out_ids[next])
+            }
+        }
+        self.update();
+    }
+
+    /// Select previous output.
+    pub fn prev_output(&mut self) {
+        let out_ids: Vec<&u32> = self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                let out_ref = d.output.borrow();
+                if out_ref.enabled && out_ref.selectable {
+                    Some(&d.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if let Some(i) = self.active_output {
+            let active_device = &self.devices[i];
+            if let Some(pos) = out_ids.iter().position(|&id| *id == active_device.id) {
+                let next = if pos == 0 { out_ids.len() - 1 } else { pos - 1 };
+                set_default_device(Channel::Output, out_ids[next])
+            }
+        }
+        self.update();
+    }
 }
 
 impl AudioState {
@@ -297,7 +396,6 @@ fn update_channel(
         mutes.push(*id);
     }
 }
-
 
 /// First get the size of the "devices" data. Divide that by the size of a u32
 /// to get the number of devices. Finally, fetch the data in a u32 vec.
@@ -465,6 +563,39 @@ fn default_device(signal: Channel) -> AudioObjectID {
         1,
     );
     d[0]
+}
+
+/// Check if device can be made active
+fn can_be_default_device(signal: Channel, id: &u32) -> bool {
+    let scope = match signal {
+        Channel::Input => kAudioDevicePropertyScopeInput,
+        Channel::Output => kAudioDevicePropertyScopeOutput,
+    };
+    let res = query_audio_object::<UInt32>(
+        id,
+        kAudioDevicePropertyDeviceCanBeDefaultDevice,
+        scope,
+        kAudioObjectPropertyElementMain,
+        1,
+    );
+    res.len() > 0 && res[0] == 1
+}
+
+/// Set active device
+fn set_default_device(signal: Channel, id: &u32) {
+    let selector = match signal {
+        Channel::Input => kAudioHardwarePropertyDefaultInputDevice,
+        Channel::Output => kAudioHardwarePropertyDefaultOutputDevice,
+    };
+
+    set_audio_object_prop(
+        &kAudioObjectSystemObject,
+        selector,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain,
+        *id,
+    )
+    .unwrap();
 }
 
 /// Change device's volume

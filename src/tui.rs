@@ -1,7 +1,6 @@
 use std::io::{Stdout, Write};
 use termion::raw::RawTerminal;
 
-use crate::audio::Volume;
 use crate::events::UiMode;
 use crate::state::AppState;
 
@@ -41,11 +40,11 @@ fn draw_list(state: &AppState) -> String {
                 acc
             }
         });
-    for (active_in, active_out, muted, device) in state.audio.device_list() {
+    for (active_in, active_out, _muted, device) in state.audio.device_list() {
         let mark = match (active_in, active_out) {
-            (true, true) => "<->",
-            (true, false) => "-->",
-            (false, true) => "<--",
+            (true, true) => "↔️  ",
+            (true, false) => "🎤 ",
+            (false, true) => "🔊 ",
             (false, false) => "   ",
         };
         let levels_in = {

@@ -95,28 +95,28 @@ fn main() {
                 draw(&mut stdout, &state);
             }
             Action::SelectNext => {
-                // match state.mode {
-                //     UiMode::EditInput => {
-                //         state.audio.next_input();
-                //     }
-                //     UiMode::EditOutput => {
-                //         //todo
-                //     }
-                //     _ => continue,
-                // };
-                // draw(&mut stdout, &state);
+                match state.mode {
+                    UiMode::EditInput => {
+                        state.audio.next_input();
+                    }
+                    UiMode::EditOutput => {
+                        state.audio.next_output();
+                    }
+                    _ => continue,
+                };
+                draw(&mut stdout, &state);
             }
             Action::SelectPrev => {
-                // match state.mode {
-                //     UiMode::EditInput => {
-                //         //todo
-                //     }
-                //     UiMode::EditOutput => {
-                //         //todo
-                //     }
-                //     _ => continue,
-                // };
-                // draw(&mut stdout, &state);
+                match state.mode {
+                    UiMode::EditInput => {
+                        state.audio.prev_input();
+                    }
+                    UiMode::EditOutput => {
+                        state.audio.prev_output();
+                    }
+                    _ => continue,
+                };
+                draw(&mut stdout, &state);
             }
             Action::ToggleMute => {
                 match state.mode {

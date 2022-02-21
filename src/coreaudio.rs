@@ -1,10 +1,11 @@
 //! FFI with CoreAudio
+#![allow(non_upper_case_globals)]
 
 use std::os::raw::{c_int, c_uchar, c_uint, c_void};
 
 pub const NO_ERR: OSStatus = 0;
-pub const kCFStringEncodingUTF8: c_uint = 134217984;
 pub const kAudioHardwarePropertyDevices: c_uint = 1684370979;
+pub const kAudioDevicePropertyDeviceCanBeDefaultDevice: c_uint = 1684434036;
 pub const kAudioHardwarePropertyDefaultInputDevice: c_uint = 1682533920;
 pub const kAudioHardwarePropertyDefaultOutputDevice: c_uint = 1682929012;
 pub const kAudioDevicePropertyDeviceNameCFString: c_uint = 1819173229;
