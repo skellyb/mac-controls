@@ -26,7 +26,7 @@ fn main() {
     if !has_full_access {
         panic!("Need accessibility and input permissions.");
     }
-    println!("Test: {has_full_access}!");
+    // println!("Test: {has_full_access}!");
 
     // Listen for events in separate threads
     let (tx1, rx) = channel();

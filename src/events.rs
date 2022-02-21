@@ -1,7 +1,10 @@
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
-use core_graphics::event::{
-    CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventType, EventField,
+use core_graphics::{
+    event::{
+        CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventType, EventField,
+    },
+    event_source::{CGEventSource, CGEventSourceStateID},
 };
 
 #[derive(Debug)]
@@ -95,6 +98,17 @@ where
 {
     let curr_loop = CFRunLoop::get_current();
 
+    // Create an event to check state of flags, like caps lock, instead of
+    // waiting for first modifier change.
+    if let Ok(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+        if let Ok(init_event) = CGEvent::new(source) {
+            let flags = init_event.get_flags();
+            let modifiers = flags_to_modifiers(&flags);
+            handler(Action::Modifier { modifiers })
+        }
+    }
+
+    // Setup event tap listener
     match CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -108,17 +122,8 @@ where
             let key_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
             let repeating =
                 event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) > 0;
-            // TODO: need to check flags on init, not waiting for first event.
-            //       usecase: caps_lock might already be on
             let flags = event.get_flags();
-            let modifiers = ModifierKeys {
-                caps_lock: flags.contains(CGEventFlags::CGEventFlagAlphaShift),
-                shift: flags.contains(CGEventFlags::CGEventFlagShift),
-                control: flags.contains(CGEventFlags::CGEventFlagControl),
-                option: flags.contains(CGEventFlags::CGEventFlagAlternate),
-                command: flags.contains(CGEventFlags::CGEventFlagCommand),
-                func: flags.contains(CGEventFlags::CGEventFlagSecondaryFn),
-            };
+            let modifiers = flags_to_modifiers(&flags);
             match event_type {
                 CGEventType::KeyDown => handler(Action::KeyDown {
                     key_code,
@@ -146,5 +151,16 @@ where
             Ok(())
         },
         Err(_) => Err("Failed to create event tap.".to_string()),
+    }
+}
+
+fn flags_to_modifiers(flags: &CGEventFlags) -> ModifierKeys {
+    ModifierKeys {
+        caps_lock: flags.contains(CGEventFlags::CGEventFlagAlphaShift),
+        shift: flags.contains(CGEventFlags::CGEventFlagShift),
+        control: flags.contains(CGEventFlags::CGEventFlagControl),
+        option: flags.contains(CGEventFlags::CGEventFlagAlternate),
+        command: flags.contains(CGEventFlags::CGEventFlagCommand),
+        func: flags.contains(CGEventFlags::CGEventFlagSecondaryFn),
     }
 }
